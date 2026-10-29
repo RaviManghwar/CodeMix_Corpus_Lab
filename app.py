@@ -9,7 +9,8 @@ import plotly.express as px
 import streamlit as st
 
 from src.corpus_tools import collocations, concordance, frequency, ngrams
-from src.langid import OTHER, tag_corpus
+from src.evaluate import accuracy_report, list_errors
+from src.langid import LANGS, OTHER, load_lexicons, tag_corpus
 from src.switching import classify_sentence, find_switches, summary
 
 SAMPLE_PATH = Path(__file__).parent / "data" / "sample" / "sample_corpus.txt"
@@ -93,6 +94,8 @@ def render_input() -> None:
     if st.button("Load sample corpus"):
         if SAMPLE_PATH.is_file():
             st.session_state["raw_text"] = SAMPLE_PATH.read_text(encoding="utf-8")
+            st.session_state.pop("tokens_df", None)
+            st.session_state.pop("tagged_text", None)
         else:
             st.error(f"Sample corpus not found at {SAMPLE_PATH}")
 
@@ -108,8 +111,11 @@ def render_tagging() -> None:
         st.info("No corpus loaded yet. Go to Input to paste text or load the sample.")
         return
 
-    df = build_token_df(text)
-    st.session_state["tokens_df"] = df
+    df = st.session_state.get("tokens_df")
+    if df is None or st.session_state.get("tagged_text") != text:
+        df = build_token_df(text)
+        st.session_state["tokens_df"] = df
+        st.session_state["tagged_text"] = text
 
     legend = "".join(
         f'<span style="background:{color};color:#212529;padding:2px 8px;'
@@ -371,7 +377,179 @@ def render_corpus_tools() -> None:
 
 def render_correct_evaluate() -> None:
     st.title("Correct & Evaluate")
-    st.info("Placeholder: editable tag table and accuracy report.")
+
+    df = st.session_state.get("tokens_df")
+    if df is None or df.empty:
+        st.info(
+            "No tagged corpus yet. Load a corpus on the Input page and open "
+            "Tagging before correcting or evaluating tags."
+        )
+        return
+
+    ambiguous = load_lexicons()["ambiguous"]
+    sent_ids = sorted(int(sent_id) for sent_id in df["sent_id"].unique())
+    sentence_options = ["All sentences"] + [
+        f"Sentence {sent_id + 1}" for sent_id in sent_ids
+    ]
+    controls = st.columns(2)
+    with controls[0]:
+        selected_sentence = st.selectbox(
+            "Sentence filter",
+            sentence_options,
+            key="evaluate_sentence_filter",
+        )
+    with controls[1]:
+        only_other = st.checkbox(
+            "Show only OTHER / ambiguous tokens",
+            key="evaluate_only_other",
+        )
+
+    display = df
+    if selected_sentence != "All sentences":
+        target = sent_ids[sentence_options.index(selected_sentence) - 1]
+        display = display[display["sent_id"] == target]
+    if only_other:
+        display = display[
+            (display["auto_lang"] == OTHER)
+            | (display["norm"].str.casefold().isin(ambiguous))
+        ]
+
+    if display.empty:
+        st.info("No tokens match the current filters.")
+    else:
+        editor_df = display[
+            ["sent_id", "tok_id", "token", "auto_lang", "manual_lang"]
+        ].copy()
+        editor_df["manual_lang"] = (
+            editor_df["manual_lang"].fillna("").astype(str)
+        )
+        edited = st.data_editor(
+            editor_df,
+            key=f"annotation_editor_{selected_sentence}_{only_other}",
+            hide_index=True,
+            width="stretch",
+            disabled=["sent_id", "tok_id", "token", "auto_lang"],
+            column_config={
+                "manual_lang": st.column_config.SelectboxColumn(
+                    "Manual language",
+                    options=[*LANGS, ""],
+                    help="Leave blank to use the automatic tag.",
+                )
+            },
+        )
+        updates = edited[["sent_id", "tok_id", "manual_lang"]].copy()
+        updates["manual_lang"] = (
+            updates["manual_lang"].fillna("").astype(str)
+        )
+        updates = updates.rename(columns={"manual_lang": "manual_update"})
+        updated = df.merge(updates, on=["sent_id", "tok_id"], how="left")
+        updated["manual_lang"] = (
+            updated["manual_update"]
+            .fillna(updated["manual_lang"])
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+        updated = updated.drop(columns="manual_update")
+        updated["final_lang"] = updated["manual_lang"].where(
+            updated["manual_lang"].isin(LANGS), updated["auto_lang"]
+        )
+        st.session_state["tokens_df"] = updated
+        df = updated
+
+    gold_col = "manual_lang"
+    eval_df = df
+    source = "manual corrections"
+    uploaded = st.file_uploader(
+        "Load gold file (CSV with sent_id, tok_id, gold_lang)",
+        type=["csv"],
+        key="gold_file",
+    )
+    if uploaded is not None:
+        try:
+            gold = pd.read_csv(uploaded)
+        except Exception:
+            st.error("Could not read the gold file as CSV.")
+        else:
+            required = {"sent_id", "tok_id", "gold_lang"}
+            if not required.issubset(gold.columns):
+                st.error(
+                    "Gold file must contain sent_id, tok_id, and gold_lang columns."
+                )
+            else:
+                gold = gold[["sent_id", "tok_id", "gold_lang"]].copy()
+                gold["sent_id"] = pd.to_numeric(gold["sent_id"], errors="coerce")
+                gold["tok_id"] = pd.to_numeric(gold["tok_id"], errors="coerce")
+                gold = gold.dropna(subset=["sent_id", "tok_id"])
+                gold["sent_id"] = gold["sent_id"].astype(int)
+                gold["tok_id"] = gold["tok_id"].astype(int)
+                gold = gold.drop_duplicates(
+                    subset=["sent_id", "tok_id"], keep="last"
+                )
+                eval_df = df.merge(
+                    gold,
+                    on=["sent_id", "tok_id"],
+                    how="left",
+                    sort=False,
+                )
+                gold_col = "gold_lang"
+                source = "the uploaded gold file"
+                matched = int(
+                    eval_df["gold_lang"]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .ne("")
+                    .sum()
+                )
+                st.caption(
+                    f"Loaded {len(gold)} gold rows; {matched} matched the token table."
+                )
+
+    report = accuracy_report(eval_df, gold_col=gold_col)
+    errors = list_errors(eval_df, gold_col=gold_col)
+
+    st.caption(f"Comparing automatic tags against {source}.")
+    accuracy_col, annotated_col = st.columns(2)
+    accuracy_col.metric("Accuracy", f"{report['accuracy'] * 100:.1f}%")
+    annotated_col.metric(
+        "Annotated",
+        f"{report['annotated_tokens']} / {report['total_tokens']} "
+        f"({report['annotated_pct']:.0f}%)",
+    )
+    if report["annotated_tokens"] < 100:
+        st.warning(
+            f"Only {report['annotated_tokens']} tokens are annotated — "
+            "accuracy is not reliable yet (100+ recommended)."
+        )
+
+    st.subheader("Per-language metrics")
+    st.dataframe(
+        report["per_language"],
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "precision": st.column_config.NumberColumn(format="%.3f"),
+            "recall": st.column_config.NumberColumn(format="%.3f"),
+            "f1": st.column_config.NumberColumn(format="%.3f"),
+        },
+    )
+
+    st.subheader("Confusion matrix")
+    confusion = report["confusion_matrix"]
+    figure = px.imshow(
+        confusion,
+        text_auto=True,
+        aspect="auto",
+        color_continuous_scale="Blues",
+        labels={"x": "Predicted (auto)", "y": "Gold", "color": "Tokens"},
+    )
+    figure.update_layout(height=360, margin=dict(l=10, r=10, t=30, b=10))
+    st.plotly_chart(figure, width="stretch")
+
+    st.subheader("Errors")
+    st.dataframe(errors, width="stretch", hide_index=True)
+    _download_csv(errors, "errors.csv", "errors_csv")
 
 
 def render_export() -> None:

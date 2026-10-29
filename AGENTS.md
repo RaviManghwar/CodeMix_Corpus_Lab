@@ -1,17 +1,18 @@
 # AGENTS.md
 
 ## Project state
-- Partially scaffolded: `app.py`, `src/`, and `tests/` exist; `tokenize.py`, `langid.py`, `switching.py`, `corpus_tools.py`, and `evaluate.py` are implemented. `export.py` and its page are placeholders. There is no `requirements.txt` or `README.md` yet.
+- Fully scaffolded: all six pages and all `src/` modules are implemented, with tests, `requirements.txt`, and `README.md`.
 - `SPEC (2).md` is the authoritative technical design; `PRD (1).md` defines scope/goals. Both filenames contain spaces and parentheses — quote them in shell.
 - Do not build V1 non-goals: ML training/fine-tuning, DB/accounts/cloud storage, audio, or languages beyond SND/URD/ROM/ENG.
 
 ## Stack and commands
 - Python 3.11+, Streamlit, pandas, Plotly, NLTK, pytest. No database; state lives in `st.session_state` and exported files.
-- No `requirements.txt` yet. Verified checks:
+- Verified checks:
+  - `pip install -r requirements.txt`
   - `python3 -m pytest` (single test: `python3 -m pytest tests/test_langid.py::test_case -q`)
   - `streamlit run app.py`
 - The `pytest` console script is not on PATH here; use `python3 -m pytest`.
-- Pin dependency versions in `requirements.txt` once created; Streamlit Community Cloud deployment depends on it.
+- Dependencies are pinned in `requirements.txt`; Streamlit Community Cloud deployment depends on it.
 
 ## Expected layout (SPEC §3)
 - `app.py` — single Streamlit entrypoint with 6 sidebar pages: Input, Tagging, Switching, Corpus Tools, Correct & Evaluate, Export.
@@ -38,4 +39,5 @@
 - Tagging must not rebuild/overwrite `tokens_df` when `raw_text` is unchanged, or manual corrections are lost. The Correct & Evaluate page rewrites `manual_lang` and recomputes `final_lang`; all analysis pages read that corrected frame.
 - `corpus_tools.py` uses `norm` and `final_lang`, ignores `OTHER`, and keeps n-grams/KWIC within sentence boundaries; frequency denominators use the filtered token count.
 - Preserve Unicode with NFC normalisation and strip zero-width characters; render Sindhi/Urdu RTL.
+- Export uses corrected `final_lang`; CSV is UTF-8 with BOM (Excel), JSON is sentence-nested with `summary` from `switching.summary`.
 - Required test coverage (SPEC §8): pure SND, URD, ROM, ENG; mixed sentence; emoji/URL/number; empty input.

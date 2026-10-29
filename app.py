@@ -10,6 +10,7 @@ import streamlit as st
 
 from src.corpus_tools import collocations, concordance, frequency, ngrams
 from src.evaluate import accuracy_report, list_errors
+from src.export import to_csv, to_json
 from src.langid import LANGS, OTHER, load_lexicons, tag_corpus
 from src.switching import classify_sentence, find_switches, summary
 
@@ -554,7 +555,37 @@ def render_correct_evaluate() -> None:
 
 def render_export() -> None:
     st.title("Export")
-    st.info("Placeholder: download annotated CSV and JSON.")
+
+    df = st.session_state.get("tokens_df")
+    if df is None or df.empty:
+        st.info(
+            "No tagged corpus yet. Load a corpus on the Input page and open "
+            "Tagging before exporting."
+        )
+        return
+
+    st.caption(
+        f"{len(df)} tokens ready to export. Downloads use the corrected "
+        "final_lang tags."
+    )
+    csv_column, json_column = st.columns(2)
+    csv_column.download_button(
+        "Download annotated CSV",
+        to_csv(df),
+        file_name="annotated_corpus.csv",
+        mime="text/csv",
+        key="export_csv",
+    )
+    json_column.download_button(
+        "Download annotated JSON",
+        to_json(df, text=st.session_state.get("raw_text")),
+        file_name="annotated_corpus.json",
+        mime="application/json",
+        key="export_json",
+    )
+
+    st.subheader("Preview (first 20 rows)")
+    st.dataframe(df.head(20), width="stretch", hide_index=True)
 
 
 RENDERERS = {

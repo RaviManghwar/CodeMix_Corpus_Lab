@@ -8,7 +8,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from src.langid import tag_corpus
+from src.corpus_tools import collocations, concordance, frequency, ngrams
+from src.langid import OTHER, tag_corpus
 from src.switching import classify_sentence, find_switches, summary
 
 SAMPLE_PATH = Path(__file__).parent / "data" / "sample" / "sample_corpus.txt"
@@ -48,6 +49,41 @@ def build_token_df(text: str) -> pd.DataFrame:
 
 def _is_rtl(token: str) -> bool:
     return bool(_ARABIC_SCRIPT.search(token))
+
+
+LANGUAGE_FILTERS = ["All", "SND", "URD", "ROM", "ENG"]
+
+
+def _language_filter(key: str) -> str | None:
+    selection = st.selectbox(
+        "Language filter",
+        LANGUAGE_FILTERS,
+        format_func=lambda value: (
+            "All" if value == "All" else f"{value} ({LANG_LABELS[value]})"
+        ),
+        key=key,
+    )
+    return None if selection == "All" else selection
+
+
+def _keyword_found(df: pd.DataFrame, keyword: str, lang: str | None = None) -> bool:
+    data = df[df["final_lang"] != OTHER]
+    if lang is not None:
+        data = data[data["final_lang"] == lang]
+    return bool(
+        (data["norm"].str.casefold() == keyword.strip().casefold()).any()
+    )
+
+
+def _download_csv(results: pd.DataFrame, filename: str, key: str) -> None:
+    st.download_button(
+        "Download CSV",
+        results.to_csv(index=False).encode("utf-8"),
+        file_name=filename,
+        mime="text/csv",
+        disabled=results.empty,
+        key=key,
+    )
 
 
 def render_input() -> None:
@@ -203,7 +239,134 @@ def render_switching() -> None:
 
 def render_corpus_tools() -> None:
     st.title("Corpus Tools")
-    st.info("Placeholder: Frequency, Concordance, N-grams, and Collocations.")
+
+    df = st.session_state.get("tokens_df")
+    if df is None or df.empty:
+        st.info(
+            "No tagged corpus yet. Load a corpus on the Input page and open "
+            "Tagging before using the corpus tools."
+        )
+        return
+
+    frequency_tab, concordance_tab, ngram_tab, collocation_tab = st.tabs(
+        ["Frequency", "Concordance", "N-grams", "Collocations"]
+    )
+
+    with frequency_tab:
+        lang = _language_filter("frequency_lang")
+        results = frequency(df, lang=lang)
+        if results.empty:
+            st.info("No tokens match this language filter.")
+        else:
+            st.dataframe(
+                results,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "relative_freq_per_1000": st.column_config.NumberColumn(
+                        "Per 1,000", format="%.2f"
+                    )
+                },
+            )
+        _download_csv(results, "frequency.csv", "frequency_csv")
+
+    with concordance_tab:
+        keyword = st.text_input("Keyword", key="concordance_keyword")
+        controls = st.columns(2)
+        window = controls[0].number_input(
+            "Window size",
+            min_value=1,
+            max_value=50,
+            value=5,
+            key="concordance_window",
+        )
+        with controls[1]:
+            lang = _language_filter("concordance_lang")
+
+        results = concordance(df, keyword, window=int(window), lang=lang)
+        if not keyword.strip():
+            st.info("Enter a keyword to build a concordance.")
+        elif results.empty:
+            if _keyword_found(df, keyword, lang):
+                st.info("No matches for this keyword in the selected language.")
+            else:
+                st.info(f"Keyword '{keyword.strip()}' was not found in the corpus.")
+        else:
+            st.dataframe(results, width="stretch", hide_index=True)
+        _download_csv(results, "concordance.csv", "concordance_csv")
+
+    with ngram_tab:
+        lang = _language_filter("ngram_lang")
+        controls = st.columns(2)
+        n = controls[0].number_input(
+            "N-gram size",
+            min_value=1,
+            max_value=5,
+            value=2,
+            key="ngram_size",
+        )
+        min_freq = controls[1].number_input(
+            "Minimum frequency",
+            min_value=1,
+            value=1,
+            key="ngram_min_freq",
+        )
+
+        results = ngrams(
+            df,
+            n=int(n),
+            lang=lang,
+            min_freq=int(min_freq),
+        )
+        if results.empty:
+            st.info("No n-grams found with the current settings.")
+        else:
+            st.dataframe(results, width="stretch", hide_index=True)
+        _download_csv(results, "ngrams.csv", "ngram_csv")
+
+    with collocation_tab:
+        keyword = st.text_input("Keyword", key="collocation_keyword")
+        controls = st.columns(3)
+        window = controls[0].number_input(
+            "Window size",
+            min_value=1,
+            max_value=50,
+            value=4,
+            key="collocation_window",
+        )
+        min_freq = controls[1].number_input(
+            "Minimum frequency",
+            min_value=1,
+            value=2,
+            key="collocation_min_freq",
+        )
+        with controls[2]:
+            lang = _language_filter("collocation_lang")
+
+        scoped = df if lang is None else df[df["final_lang"] == lang]
+        results = collocations(
+            scoped,
+            keyword,
+            window=int(window),
+            min_freq=int(min_freq),
+        )
+        if not keyword.strip():
+            st.info("Enter a keyword to find collocates.")
+        elif results.empty:
+            if _keyword_found(scoped, keyword):
+                st.info("No collocates meet the current settings.")
+            else:
+                st.info(f"Keyword '{keyword.strip()}' was not found in the corpus.")
+        else:
+            st.dataframe(
+                results,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "pmi": st.column_config.NumberColumn("PMI", format="%.2f")
+                },
+            )
+        _download_csv(results, "collocations.csv", "collocation_csv")
 
 
 def render_correct_evaluate() -> None:

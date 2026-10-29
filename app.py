@@ -9,6 +9,7 @@ import plotly.express as px
 import streamlit as st
 
 from src.langid import tag_corpus
+from src.switching import classify_sentence, find_switches, summary
 
 SAMPLE_PATH = Path(__file__).parent / "data" / "sample" / "sample_corpus.txt"
 
@@ -118,7 +119,86 @@ def render_tagging() -> None:
 
 def render_switching() -> None:
     st.title("Switching")
-    st.info("Placeholder: switch rate, switch types, and direction heatmap.")
+
+    df = st.session_state.get("tokens_df")
+    if df is None or df.empty:
+        st.info(
+            "No tagged corpus yet. Load a corpus on the Input page and open "
+            "Tagging before viewing switching statistics."
+        )
+        return
+
+    stats = summary(df)
+    sentence_rows = []
+    for sent_id, group in df.groupby("sent_id", sort=True):
+        tags = group["final_lang"].tolist()
+        sentence_rows.append(
+            {
+                "Sentence": int(sent_id) + 1,
+                "Tokens": " ".join(group["token"]),
+                "Switches": len(find_switches(tags)),
+                "Type": classify_sentence(tags),
+            }
+        )
+    sentences_df = pd.DataFrame(sentence_rows)
+    mixed_pct = (
+        (sentences_df["Type"] == "intra").mean() * 100
+        if not sentences_df.empty
+        else 0.0
+    )
+
+    rate_col, mixed_col, total_col = st.columns(3)
+    rate_col.metric("Switch rate", f"{stats['switch_rate']:.1f} / 100 tokens")
+    mixed_col.metric("Mixed sentences", f"{mixed_pct:.0f}%")
+    total_col.metric(
+        "Total switches",
+        stats["intra_sentential"] + stats["inter_sentential"],
+    )
+    st.caption(
+        f"{stats['intra_sentential']} intra-sentential · "
+        f"{stats['inter_sentential']} inter-sentential"
+    )
+
+    st.subheader("Language distribution")
+    distribution = stats["distribution"]
+    bar_df = pd.DataFrame(
+        {"Language": list(distribution), "Tokens": list(distribution.values())}
+    )
+    bar = px.bar(
+        bar_df,
+        x="Language",
+        y="Tokens",
+        color="Language",
+        color_discrete_map=LANG_COLORS,
+        text="Tokens",
+    )
+    bar.update_layout(
+        showlegend=False,
+        height=320,
+        margin=dict(l=10, r=10, t=30, b=10),
+    )
+    st.plotly_chart(bar, width="stretch")
+
+    st.subheader("Switch directions")
+    languages = ["SND", "URD", "ROM", "ENG"]
+    matrix = stats["direction_matrix"]
+    matrix_df = pd.DataFrame(
+        [[matrix[source][target] for target in languages] for source in languages],
+        index=languages,
+        columns=languages,
+    )
+    heatmap = px.imshow(
+        matrix_df,
+        text_auto=True,
+        aspect="auto",
+        color_continuous_scale="Blues",
+        labels={"x": "To", "y": "From", "color": "Switches"},
+    )
+    heatmap.update_layout(height=360, margin=dict(l=10, r=10, t=30, b=10))
+    st.plotly_chart(heatmap, width="stretch")
+
+    st.subheader("Sentences")
+    st.dataframe(sentences_df, width="stretch", hide_index=True)
 
 
 def render_corpus_tools() -> None:

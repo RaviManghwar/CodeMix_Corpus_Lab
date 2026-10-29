@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Project state
-- Partially scaffolded: `app.py`, `src/`, and `tests/` exist, but only `tokenize.py` and `langid.py` are implemented. Other modules/pages are placeholders. There is no `requirements.txt`, `README.md`, or git repo yet.
+- Partially scaffolded: `app.py`, `src/`, and `tests/` exist, but only `tokenize.py`, `langid.py`, and `switching.py` are implemented. Other modules/pages are placeholders. There is no `requirements.txt` or `README.md` yet.
 - `SPEC (2).md` is the authoritative technical design; `PRD (1).md` defines scope/goals. Both filenames contain spaces and parentheses — quote them in shell.
 - Do not build V1 non-goals: ML training/fine-tuning, DB/accounts/cloud storage, audio, or languages beyond SND/URD/ROM/ENG.
 
@@ -32,7 +32,7 @@
 - Token DataFrame columns/order: `sent_id, tok_id, token, norm, auto_lang, manual_lang, final_lang` (SPEC §4).
 - Tagging order: number/punctuation/emoji/URL/mention/hashtag → `OTHER`; Arabic script → SND/URD; Latin lexicon → ROM/ENG, unknown Latin → `OTHER`.
 - `norm` lowercases Latin tokens and collapses runs of 3+ identical Latin letters; lexicon lookups use lowercase without that collapse.
-- `switching.py` ignores `OTHER` when finding switch points.
+- `switching.py` ignores `OTHER` when finding switch points; `switch_rate` is intra-sentential switches per 100 non-`OTHER` tokens, and `summary` returns `distribution`, `switch_rate`, `intra_sentential`, `inter_sentential`, `direction_matrix`.
 - Use `final_lang` (manual if set, else auto) for corpus tools, visualisation, switching stats, and export. Compare `auto_lang` vs `manual_lang` only in `evaluate.py`.
 - The Tagging page caches `tag_corpus(text)` with `st.cache_data` and stores the token DataFrame in `st.session_state["tokens_df"]`; later pages should read that key.
 - Preserve Unicode with NFC normalisation and strip zero-width characters; render Sindhi/Urdu RTL.
